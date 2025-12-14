@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
+@import "tailwindcss";
+
+/* overall font of whole text in the entire project */
+*{
+   font-family: "Outfit", sans-serif;
+}
+/* primary color for the entire project  */
+:root{
+  --color-primary: #5044E5;
+}
+.bg-primary { background-color: var(--color-primary); }
+.text-primary { color: var(--color-primary); }
+
+.reset-tw, .reset-tw *{
+  all : revert !important;
+}
+
+.cl-drawerRoot{
+  z-index: 10;
+}
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
