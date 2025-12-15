@@ -1,10 +1,10 @@
 import { use } from "react";
-import sql from "../configs/db.js";
+import { getDB } from "../configs/db.js";
 
 export const getUserCreations = async (req, res) => {
     try {
         const {userId} = req.auth();
-
+        const sql = getDB();
         const creations = await sql `SELECT * FROM creations WHERE user_id = ${userId} ORDER BY created_at DESC`;
 
         res.json({success: true, creations});
@@ -16,7 +16,7 @@ export const getUserCreations = async (req, res) => {
 
 export const getPublishedCreations = async (req, res) => {
     try {
-    
+        const sql = getDB();
         const creations = await sql `SELECT * FROM creations WHERE publish = true ORDER BY created_at DESC`;
 
         res.json({success: true, creations});
@@ -31,7 +31,7 @@ export const toggleLikeCreation = async (req, res) => {
         const {userId} = req.auth();
 
         const {id} = req.body; //creation id - for which we will like like/ dislike
-        
+        const sql = getDB();
         const [creations] = await sql `SELECT * FROM creations WHERE id = ${id}`;
         
         if(!creations){

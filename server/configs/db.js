@@ -1,5 +1,15 @@
-import { neon } from '@neondatabase/serverless';
-import 'dotenv/config';
-const sql = neon(`${process.env.DATABASE_URL}`); //to read and write to the database
+import { neon } from "@neondatabase/serverless";
 
-export default sql;
+let sql;
+
+export function getDB() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is not defined");
+  }
+
+  if (!sql) {
+    sql = neon(process.env.DATABASE_URL);
+  }
+
+  return sql;
+}

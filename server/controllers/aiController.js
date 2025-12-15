@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import sql from "../configs/db.js";
+import { getDB } from "../configs/db.js";
 import { clerkClient } from "@clerk/express";
 import axios from "axios";
 import {v2 as cloudinary} from 'cloudinary';
@@ -43,7 +43,7 @@ export const generateArticle = async (req, res ) => {
         }); 
         //get generated article from response (as responses has multiple choices we will get first choice)
         const content = response.choices[0].message.content;
-        
+        const sql = getDB();
         //store response in database along with userId
         await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'article')`;
         
@@ -80,7 +80,7 @@ export const generateBlogTitle = async (req, res ) => {
         }); 
         //get generated article from response (as responses has multiple choices we will get first choice)
         const content = response.choices[0].message.content;
-        
+        const sql = getDB();
         //store response in database along with userId
         await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'blog-title')`;
         
@@ -123,7 +123,7 @@ export const generateImage = async (req, res ) => {
         
         //upload this image to cloud storage cloudinary 
         const {secure_url} =  await cloudinary.uploader.upload(base64Image);
-        
+        const sql = getDB();
         //store response in database along with userId
         await sql `INSERT INTO creations (user_id, prompt, content, type, publish) VALUES (${userId}, ${prompt}, ${secure_url}, 'image', ${publish ?? false})`;
         
@@ -148,7 +148,7 @@ export const removeImageBackground = async (req, res ) => {
 
         //upload this image to cloud storage cloudinary 
         const {secure_url} =  await cloudinary.uploader.upload(image.path, {transformation: [{effect: 'background_removal', backgrounnd_removal: 'remove_the_background'}]});
-        
+        const sql = getDB();
         //store response in database along with userId
         await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Remove background from image', ${secure_url}, 'image')`;
         
@@ -176,7 +176,7 @@ export const removeImageObject = async (req, res ) => {
         const {public_id} =  await cloudinary.uploader.upload(image.path);
 
         const imageUrl = cloudinary.url(public_id, {transformation: [{effect: `gen_remove:${object}`}], recource_type:'image'});
-        
+        const sql = getDB();
         //store response in database along with userId
         await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${`Remove ${object} from image`}, ${imageUrl}, 'image')`;
         
@@ -229,7 +229,7 @@ export const resumeReview = async (req, res ) => {
             max_tokens: 1000, 
         }); 
         const content = response.choices[0].message.content;
-
+        const sql = getDB();
         //store content in database along with userId
         await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Review the uploaded resume', ${content}, 'review-resume')`;
         
