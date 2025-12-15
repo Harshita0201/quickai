@@ -3,13 +3,19 @@ import { getDB } from "../configs/db.js";
 import { clerkClient } from "@clerk/express";
 import axios from "axios";
 import {v2 as cloudinary} from 'cloudinary';
-// import pdfParse from "pdf-parse/lib/pdf-parse.js";
+import pdfTextExtract from "pdf-text-extract";
 import fs from "fs";
-import * as pdfParse from "pdf-parse";
 
 
 
-
+function extractPdfText(filePath) {
+  return new Promise((resolve, reject) => {
+    pdfTextExtract(filePath, (err, pages) => {
+      if (err) return reject(err);
+      resolve(pages.join("\n"));
+    });
+  });
+}
 
 const AI = new OpenAI({
     apiKey: process.env.GEMINI_API_KEY,
@@ -187,56 +193,54 @@ export const removeImageObject = async (req, res ) => {
     }
 }
 
-export const resumeReview = async (req, res ) => { 
-    try {
-        const {userId} = req.auth();
-        const resume = req.file; //we will get image file from multer middleware
-        const plan = req.plan;
-        
+export const resumeReview = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const resume = req.file;
+    const plan = req.plan;
 
-        //this is only for premium users
-        if(plan !== 'premium'){
-            return res.json({success: false, message: 'Feature avaiable only for premium users'});
-        }
-        //continue with image object removal for premium users
-
-        //check file size 
-        if(resume.size > 5 * 1024 *1024){
-            return res.json({success: false, message: 'File size should be less than 5MB'});
-        }
-
-        //for file size less than 5MB, then convert this file into data buffer 
-        const dataBuffer = fs.readFileSync(resume.path);
-        
-        //parse the resume to extract the text using pdf-parse
-        // const parser = new PDFParse({ data: dataBuffer });
-        // const pdfResult = await parser.getText();   // { text, pages, ... }
-        //const resumeText = pdfResult.text || "";    // plain text from PDF
-        const pdfData = await pdfParse(dataBuffer);
-        const resumeText = pdfData.text || "";
-        //generate prompt using extracted text
-        const prompt = `Review the following resume and provide constructive feedback on its strengths, weakenesses, and areas for improvement. \n\n${resumeText}`;
-        
-        //use google gemini api to generate review feedback for resume
-        const response = await AI.chat.completions.create({
-            model: "gemini-2.5-flash-lite",
-            messages: [
-                {
-                    role: "user",
-                    content: prompt, 
-                },
-            ],
-            temperature: 0.7, //creativity of the response
-            max_tokens: 1000, 
-        }); 
-        const content = response.choices[0].message.content;
-        const sql = getDB();
-        //store content in database along with userId
-        await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Review the uploaded resume', ${content}, 'review-resume')`;
-        
-        res.json({success: true, content}); //send content back to client
-    } catch (error) {
-        console.log(error.message);
-        res.json({success: false, message: 'Error reviewing resume.', error: error.message});
+    if (plan !== "premium") {
+      return res.json({
+        success: false,
+        message: "Feature available only for premium users",
+      });
     }
-}
+
+    if (resume.size > 5 * 1024 * 1024) {
+      return res.json({
+        success: false,
+        message: "File size should be less than 5MB",
+      });
+    }
+
+    // ✅ SAFE PDF TEXT EXTRACTION
+    const resumeText = await extractPdfText(resume.path);
+
+    const prompt = `Review the following resume and provide constructive feedback on its strengths, weaknesses, and areas for improvement:\n\n${resumeText}`;
+
+    const AI = getAI();
+    const response = await AI.chat.completions.create({
+      model: "gemini-2.5-flash-lite",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+      max_tokens: 1000,
+    });
+
+    const content = response.choices[0].message.content;
+    const sql = getDB();
+
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (${userId}, 'Review the uploaded resume', ${content}, 'review-resume')
+    `;
+
+    return res.json({ success: true, content });
+  } catch (error) {
+    console.error(error);
+    return res.json({
+      success: false,
+      message: "Error reviewing resume",
+      error: error.message,
+    });
+  }
+};
