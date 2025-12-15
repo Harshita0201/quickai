@@ -3,10 +3,10 @@ import { getDB } from "../configs/db.js";
 import { clerkClient } from "@clerk/express";
 import axios from "axios";
 import {v2 as cloudinary} from 'cloudinary';
-import 'dotenv/config';
+// import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import fs from "fs";
+import * as pdfParse from "pdf-parse";
 
-import { PDFParse } from "pdf-parse";
 
 
 
@@ -209,10 +209,11 @@ export const resumeReview = async (req, res ) => {
         const dataBuffer = fs.readFileSync(resume.path);
         
         //parse the resume to extract the text using pdf-parse
-        const parser = new PDFParse({ data: dataBuffer });
-        const pdfResult = await parser.getText();   // { text, pages, ... }
-        const resumeText = pdfResult.text || "";    // plain text from PDF
-        
+        // const parser = new PDFParse({ data: dataBuffer });
+        // const pdfResult = await parser.getText();   // { text, pages, ... }
+        //const resumeText = pdfResult.text || "";    // plain text from PDF
+        const pdfData = await pdfParse(dataBuffer);
+        const resumeText = pdfData.text || "";
         //generate prompt using extracted text
         const prompt = `Review the following resume and provide constructive feedback on its strengths, weakenesses, and areas for improvement. \n\n${resumeText}`;
         
