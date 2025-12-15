@@ -2,12 +2,13 @@ import OpenAI from "openai";
 import { getDB } from "../configs/db.js";
 import { clerkClient } from "@clerk/express";
 import axios from "axios";
-import {v2 as cloudinary} from 'cloudinary';
+import { v2 as cloudinary } from "cloudinary";
 import pdfTextExtract from "pdf-text-extract";
 import fs from "fs";
 
-
-
+/* ------------------------------------------------------------------
+   SAFE PDF TEXT EXTRACTION (NO DOM / NO CANVAS)
+------------------------------------------------------------------- */
 function extractPdfText(filePath) {
   return new Promise((resolve, reject) => {
     pdfTextExtract(filePath, (err, pages) => {
@@ -17,182 +18,299 @@ function extractPdfText(filePath) {
   });
 }
 
-const AI = new OpenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"
-}); //using this we can generate articles, images etc using Gemini API / response of user queries coming from client side
+/* ------------------------------------------------------------------
+   SAFE, LAZY OPENAI / GEMINI CLIENT
+------------------------------------------------------------------- */
+let AI;
 
+function getAI() {
+  const apiKey =
+    process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
 
-export const generateArticle = async (req, res ) => { 
-    try {
-        const {userId} = req.auth();
-        const {prompt, length} = req.body;
-        const plan = req.plan; // free or premium
-        const free_usage = req.free_usage; // free usage count for free users
+  if (!apiKey) {
+    throw new Error(
+      "Missing GEMINI_API_KEY / OPENAI_API_KEY environment variable"
+    );
+  }
 
-        if(plan !== 'premium' && free_usage >= 10){
-            //user already used 10 free  article generations
-            return res.json({success: false, message: 'Free usage limit reached. Please upgrade to premium plan.'});
-        }
+  if (!AI) {
+    AI = new OpenAI({
+      apiKey,
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    });
+  }
 
-        // proceed to generate article using AI service, ehrn user has premium plan / less than 10 free usagesß   
-        const response = await AI.chat.completions.create({
-            model: "gemini-2.5-flash-lite",
-            messages: [
-                {
-                    role: "user",
-                    content: prompt, //prompt that user has sent from client side
-                },
-            ],
-            temperature: 0.7, //creativity of the response
-            max_tokens: length, //length of the article
-        }); 
-        //get generated article from response (as responses has multiple choices we will get first choice)
-        const content = response.choices[0].message.content;
-        const sql = getDB();
-        //store response in database along with userId
-        await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'article')`;
-        
-        if(plan !== 'premium'){
-            //increment free usage count for free users
-            await clerkClient.users.updateUserMetadata(userId, {
-                privateMetadata: {free_usage: free_usage + 1}
-            });
-        }
-        res.json({success: true, content}); //send content back to client
-    } catch (error) {
-        console.log(error.message);
-        res.json({success: false, message: 'Error generating article', error: error.message});
-    }
+  return AI;
 }
 
-export const generateBlogTitle = async (req, res ) => { 
-    try {
-        const {userId} = req.auth();
-        const {prompt} = req.body;
-        const plan = req.plan; // free or premium
-        const free_usage = req.free_usage; // free usage count for free users
+/* ------------------------------------------------------------------
+   ARTICLE GENERATION
+------------------------------------------------------------------- */
+export const generateArticle = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const { prompt, length } = req.body;
+    const plan = req.plan;
+    const free_usage = req.free_usage;
 
-        if(plan !== 'premium' && free_usage >= 10){
-            //user already used 10 free  article generations
-            return res.json({success: false, message: 'Free usage limit reached. Please upgrade to premium plan.'});
-        }
-
-        // proceed to generate article using AI service, ehrn user has premium plan / less than 10 free usagesß   
-        const response = await AI.chat.completions.create({
-            model: "gemini-2.5-flash-lite",
-            messages: [{ role: "user", content: prompt }], //prompt that user has sent from client side
-            temperature: 0.7, //creativity of the response
-        }); 
-        //get generated article from response (as responses has multiple choices we will get first choice)
-        const content = response.choices[0].message.content;
-        const sql = getDB();
-        //store response in database along with userId
-        await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'blog-title')`;
-        
-        if(plan !== 'premium'){
-            //increment free usage count for free users
-            await clerkClient.users.updateUserMetadata(userId, {
-                privateMetadata: {free_usage: free_usage + 1}
-            });
-        }
-        res.json({success: true, content}); //send content back to client
-    } catch (error) {
-        console.log(error.message);
-        res.json({success: false, message: 'Error generating blog title', error: error.message});
+    if (plan !== "premium" && free_usage >= 10) {
+      return res.json({
+        success: false,
+        message: "Free usage limit reached. Please upgrade to premium plan.",
+      });
     }
-}
 
-export const generateImage = async (req, res ) => { 
-    try {
-        const {userId} = req.auth();
-        const {prompt, publish} = req.body; //publish status is either true or false
-        const plan = req.plan;
+    const AI = getAI();
+    const response = await AI.chat.completions.create({
+      model: "gemini-2.5-flash-lite",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+      max_tokens: length,
+    });
 
-        //this is only for premium users
-        if(plan !== 'premium'){
-            return res.json({success: false, message: 'Feature avaiable only for premium users'});
-        }
+    const content = response.choices[0].message.content;
+    const sql = getDB();
 
-        //continue with image generation for premium users
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (${userId}, ${prompt}, ${content}, 'article')
+    `;
 
-        //using clipdrop api to generate images using text 
-        const formData = new FormData();
-        formData.append('prompt', prompt);
-
-        const {data} = await axios.post("https://clipdrop-api.co/text-to-image/v1", formData, {
-            headers: {'x-api-key': process.env.CLIPDROP_API_KEY}, 
-            responseType: 'arraybuffer',
-        }) //we get base64 image in response
-
-        const base64Image = `data:image/png;base64,${Buffer.from(data, 'binary').toString('base64')}`
-        
-        //upload this image to cloud storage cloudinary 
-        const {secure_url} =  await cloudinary.uploader.upload(base64Image);
-        const sql = getDB();
-        //store response in database along with userId
-        await sql `INSERT INTO creations (user_id, prompt, content, type, publish) VALUES (${userId}, ${prompt}, ${secure_url}, 'image', ${publish ?? false})`;
-        
-        res.json({success: true, secure_url}); //send content back to client
-    } catch (error) {
-        console.log(error.message);
-        res.json({success: false, message: 'Error generating image', error: error.message});
+    if (plan !== "premium") {
+      await clerkClient.users.updateUserMetadata(userId, {
+        privateMetadata: { free_usage: free_usage + 1 },
+      });
     }
-}
 
-export const removeImageBackground = async (req, res ) => { 
-    try {
-        const {userId} = req.auth();
-        const image = req.file; //we will get image file from multer middleware
-        const plan = req.plan;
+    return res.json({ success: true, content });
+  } catch (error) {
+    console.error(error);
+    return res.json({
+      success: false,
+      message: "Error generating article",
+      error: error.message,
+    });
+  }
+};
 
-        //this is only for premium users
-        if(plan !== 'premium'){
-            return res.json({success: false, message: 'Feature avaiable only for premium users'});
-        }
-        //continue with image background removal for premium users
+/* ------------------------------------------------------------------
+   BLOG TITLE GENERATION
+------------------------------------------------------------------- */
+export const generateBlogTitle = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const { prompt } = req.body;
+    const plan = req.plan;
+    const free_usage = req.free_usage;
 
-        //upload this image to cloud storage cloudinary 
-        const {secure_url} =  await cloudinary.uploader.upload(image.path, {transformation: [{effect: 'background_removal', backgrounnd_removal: 'remove_the_background'}]});
-        const sql = getDB();
-        //store response in database along with userId
-        await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Remove background from image', ${secure_url}, 'image')`;
-        
-        res.json({success: true, secure_url}); //send content back to client
-    } catch (error) {
-        console.log(error.message);
-        res.json({success: false, message: 'Error removing background image', error: error.message});
+    if (plan !== "premium" && free_usage >= 10) {
+      return res.json({
+        success: false,
+        message: "Free usage limit reached. Please upgrade to premium plan.",
+      });
     }
-}
 
-export const removeImageObject = async (req, res ) => { 
-    try {
-        const {userId} = req.auth();
-        const image = req.file; //we will get image file from multer middleware
-        const plan = req.plan;
-        const {object} = req.body; //object to be removed from image
+    const AI = getAI();
+    const response = await AI.chat.completions.create({
+      model: "gemini-2.5-flash-lite",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+    });
 
-        //this is only for premium users
-        if(plan !== 'premium'){
-            return res.json({success: false, message: 'Feature avaiable only for premium users'});
-        }
-        //continue with image object removal for premium users
+    const content = response.choices[0].message.content;
+    const sql = getDB();
 
-        //upload this image to cloud storage cloudinary 
-        const {public_id} =  await cloudinary.uploader.upload(image.path);
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (${userId}, ${prompt}, ${content}, 'blog-title')
+    `;
 
-        const imageUrl = cloudinary.url(public_id, {transformation: [{effect: `gen_remove:${object}`}], recource_type:'image'});
-        const sql = getDB();
-        //store response in database along with userId
-        await sql `INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${`Remove ${object} from image`}, ${imageUrl}, 'image')`;
-        
-        res.json({success: true, imageUrl}); //send content back to client
-    } catch (error) {
-        console.log(error.message);
-        res.json({success: false, message: 'Error removing object from image', error: error.message});
+    if (plan !== "premium") {
+      await clerkClient.users.updateUserMetadata(userId, {
+        privateMetadata: { free_usage: free_usage + 1 },
+      });
     }
-}
 
+    return res.json({ success: true, content });
+  } catch (error) {
+    console.error(error);
+    return res.json({
+      success: false,
+      message: "Error generating blog title",
+      error: error.message,
+    });
+  }
+};
+
+/* ------------------------------------------------------------------
+   IMAGE GENERATION
+------------------------------------------------------------------- */
+export const generateImage = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const { prompt, publish } = req.body;
+    const plan = req.plan;
+
+    if (plan !== "premium") {
+      return res.json({
+        success: false,
+        message: "Feature available only for premium users",
+      });
+    }
+
+    const formData = new FormData();
+    formData.append("prompt", prompt);
+
+    const { data } = await axios.post(
+      "https://clipdrop-api.co/text-to-image/v1",
+      formData,
+      {
+        headers: { "x-api-key": process.env.CLIPDROP_API_KEY },
+        responseType: "arraybuffer",
+      }
+    );
+
+    const base64Image = `data:image/png;base64,${Buffer.from(
+      data,
+      "binary"
+    ).toString("base64")}`;
+
+    const { secure_url } = await cloudinary.uploader.upload(base64Image);
+    const sql = getDB();
+
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type, publish)
+      VALUES (${userId}, ${prompt}, ${secure_url}, 'image', ${publish ?? false})
+    `;
+
+    return res.json({ success: true, secure_url });
+  } catch (error) {
+    console.error(error);
+    return res.json({
+      success: false,
+      message: "Error generating image",
+      error: error.message,
+    });
+  }
+};
+export const removeImageBackground = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const image = req.file;
+    const plan = req.plan;
+
+    if (plan !== "premium") {
+      return res.json({
+        success: false,
+        message: "Feature available only for premium users",
+      });
+    }
+
+    if (!image) {
+      return res.json({
+        success: false,
+        message: "No image file uploaded",
+      });
+    }
+
+    const { secure_url } = await cloudinary.uploader.upload(image.path, {
+      transformation: [
+        {
+          effect: "background_removal",
+        },
+      ],
+    });
+
+    const sql = getDB();
+
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (${userId}, 'Remove background from image', ${secure_url}, 'image')
+    `;
+
+    return res.json({
+      success: true,
+      secure_url,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.json({
+      success: false,
+      message: "Error removing background image",
+      error: error.message,
+    });
+  }
+};
+
+export const removeImageObject = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const image = req.file;
+    const plan = req.plan;
+    const { object } = req.body;
+
+    if (plan !== "premium") {
+      return res.json({
+        success: false,
+        message: "Feature available only for premium users",
+      });
+    }
+
+    if (!image) {
+      return res.json({
+        success: false,
+        message: "No image file uploaded",
+      });
+    }
+
+    if (!object) {
+      return res.json({
+        success: false,
+        message: "Object to remove is required",
+      });
+    }
+
+    const { public_id } = await cloudinary.uploader.upload(image.path);
+
+    const imageUrl = cloudinary.url(public_id, {
+      transformation: [
+        {
+          effect: `gen_remove:${object}`,
+        },
+      ],
+      resource_type: "image",
+    });
+
+    const sql = getDB();
+
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (
+        ${userId},
+        ${`Remove ${object} from image`},
+        ${imageUrl},
+        'image'
+      )
+    `;
+
+    return res.json({
+      success: true,
+      imageUrl,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.json({
+      success: false,
+      message: "Error removing object from image",
+      error: error.message,
+    });
+  }
+};
+
+
+/* ------------------------------------------------------------------
+   RESUME REVIEW (PDF TEXT → AI)
+------------------------------------------------------------------- */
 export const resumeReview = async (req, res) => {
   try {
     const { userId } = req.auth();
@@ -213,7 +331,6 @@ export const resumeReview = async (req, res) => {
       });
     }
 
-    // ✅ SAFE PDF TEXT EXTRACTION
     const resumeText = await extractPdfText(resume.path);
 
     const prompt = `Review the following resume and provide constructive feedback on its strengths, weaknesses, and areas for improvement:\n\n${resumeText}`;
